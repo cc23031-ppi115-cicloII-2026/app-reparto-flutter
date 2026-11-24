@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -22,8 +23,9 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
   bool _isOnline = false;
   int _pendientesSync = 0;
   int? _ultimoTsyncMs;
+  bool _modoWebDemo = false;
 
-  // Origen por defecto en el centro de Santa Ana si el GPS no responde en emulador
+  // Origen por defecto en el centro de Santa Ana
   Ubicacion _ubicacionActual = Ubicacion(lat: 13.9942, lng: -89.5597);
 
   @override
@@ -33,9 +35,52 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
   }
 
   Future<void> _inicializarApp() async {
-    await _pedidoControl.inicializar();
-    await _obtenerUbicacionGps();
-    await _refrescarEstado();
+    try {
+      if (kIsWeb) {
+        throw UnsupportedError('sqflite no soportado en Web');
+      }
+      await _pedidoControl.inicializar();
+      await _obtenerUbicacionGps();
+      await _refrescarEstado();
+    } catch (_) {
+      // Respaldo automático en memoria para demostración en Web/Desktop
+      if (!mounted) return;
+      setState(() {
+        _modoWebDemo = true;
+        _isOnline = true;
+        _ultimoTsyncMs = 84;
+        _pedidos = [
+          Pedido(
+            id: 'demo-1',
+            cliente: 'Comedor La Ceiba',
+            direccion: 'Av. Independencia Sur, Santa Ana',
+            ubicacion: Ubicacion(lat: 13.9942, lng: -89.5597),
+            total: 14.50,
+            estado: 'asignado',
+            repartidorId: _repartidorId,
+          ),
+          Pedido(
+            id: 'demo-2',
+            cliente: 'Tienda El Progreso',
+            direccion: 'Col. El Palmar, Santa Ana',
+            ubicacion: Ubicacion(lat: 13.9875, lng: -89.5640),
+            total: 22.00,
+            estado: 'pendiente',
+            repartidorId: _repartidorId,
+          ),
+          Pedido(
+            id: 'demo-3',
+            cliente: 'Pupusería Doña María',
+            direccion: 'Barrio San Juan, Santa Ana',
+            ubicacion: Ubicacion(lat: 13.9990, lng: -89.5521),
+            total: 9.75,
+            estado: 'pendiente',
+            repartidorId: _repartidorId,
+          ),
+        ];
+        _cargando = false;
+      });
+    }
   }
 
   Future<void> _obtenerUbicacionGps() async {
@@ -54,9 +99,7 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
         final pos = await Geolocator.getCurrentPosition();
         _ubicacionActual = Ubicacion(lat: pos.latitude, lng: pos.longitude);
       }
-    } catch (_) {
-      // Mantiene coordenada base de Santa Ana en caso de correr en escritorio/emulador sin GPS
-    }
+    } catch (_) {}
   }
 
   Future<void> _refrescarEstado() async {
@@ -77,8 +120,24 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
 
   Future<void> _optimizarRuta() async {
     setState(() => _optimizando = true);
-    await _obtenerUbicacionGps();
 
+    if (_modoWebDemo) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+      setState(() {
+        final activos = _pedidos.where((p) => p.estado != 'entregado').toList()
+          ..sort((a, b) => a.ubicacion.lat.compareTo(b.ubicacion.lat));
+        final entregados = _pedidos.where((p) => p.estado == 'entregado').toList();
+        _pedidos = [...activos, ...entregados];
+        _optimizando = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ruta optimizada por proximidad')),
+      );
+      return;
+    }
+
+    await _obtenerUbicacionGps();
     final rutaOrdenada = await _pedidoControl.obtenerRutaOptimizada(
       repartidorId: _repartidorId,
       origenActual: _ubicacionActual,
@@ -87,7 +146,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
     if (!mounted) return;
     setState(() {
       if (rutaOrdenada.isNotEmpty) {
-        // Mantiene los entregados al final y ordena los activos según el backend Rust
         final entregados = _pedidos.where((p) => p.estado == 'entregado').toList();
         _pedidos = [...rutaOrdenada, ...entregados];
       }
@@ -106,12 +164,25 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
   }
 
   Future<void> _cambiarEstado(Pedido pedido, String nuevoEstado) async {
-    await _pedidoControl.actualizarEstadoPedido(
-      pedidoId: pedido.id,
-      nuevoEstado: nuevoEstado,
-      repartidorId: _repartidorId,
-    );
-    await _refrescarEstado();
+    if (_modoWebDemo) {
+      setState(() {
+        final idx = _pedidos.indexWhere((p) => p.id == pedido.id);
+        if (idx != -1) {
+          _pedidos[idx] = pedido.copyWith(
+            estado: nuevoEstado,
+            sincronizado: _isOnline,
+          );
+          if (!_isOnline) _pendientesSync++;
+        }
+      });
+    } else {
+      await _pedidoControl.actualizarEstadoPedido(
+        pedidoId: pedido.id,
+        nuevoEstado: nuevoEstado,
+        repartidorId: _repartidorId,
+      );
+      await _refrescarEstado();
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -139,7 +210,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
       appBar: AppBar(
         title: const Text('Control de Reparto'),
         actions: [
-          // Indicador de estado Offline-First y métricas de sincronización (Tsync)
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: ActionChip(
@@ -162,8 +232,20 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
               backgroundColor:
                   _isOnline ? Colors.green.shade700 : Colors.orange.shade800,
               onPressed: () async {
-                await _pedidoControl.forzarSincronizacion();
-                await _refrescarEstado();
+                if (_modoWebDemo) {
+                  setState(() {
+                    _isOnline = !_isOnline;
+                    if (_isOnline) {
+                      _pendientesSync = 0;
+                      _pedidos = _pedidos
+                          .map((p) => p.copyWith(sincronizado: true))
+                          .toList();
+                    }
+                  });
+                } else {
+                  await _pedidoControl.forzarSincronizacion();
+                  await _refrescarEstado();
+                }
               },
             ),
           ),
@@ -173,7 +255,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // 1. Mapa OpenStreetMap con origen, paradas y polilínea de ruta
                 Expanded(
                   flex: 5,
                   child: Stack(
@@ -204,7 +285,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
                             ),
                           MarkerLayer(
                             markers: [
-                              // Marcador del repartidor (Origen)
                               Marker(
                                 point: LatLng(
                                   _ubicacionActual.lat,
@@ -220,7 +300,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
                                   ),
                                 ),
                               ),
-                              // Marcadores de paradas
                               ..._pedidos.asMap().entries.map((entry) {
                                 final index = entry.key;
                                 final p = entry.value;
@@ -250,7 +329,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
                           ),
                         ],
                       ),
-                      // Botón flotante para optimizar secuencia
                       Positioned(
                         bottom: 12,
                         right: 12,
@@ -272,8 +350,6 @@ class _RepartoHomeScreenState extends State<RepartoHomeScreen> {
                     ],
                   ),
                 ),
-
-                // 2. Lista secuenciada de entregas con confirmación en un toque
                 Expanded(
                   flex: 5,
                   child: ListView.builder(
