@@ -1,13 +1,13 @@
 class OperacionOffline {
   final String opId;
   final String pedidoId;
-  final String tipoOperacion; // ACTUALIZAR_ESTADO | CREAR_PEDIDO
+  final String tipoOperacion; // CREAR_PEDIDO | ACTUALIZAR_ESTADO
   final String payloadJson;
   final int creadoEnMs;
   final int intentos;
   final String estadoSync; // PENDIENTE | ENVIADA | CONFLICTO
 
-  OperacionOffline({
+  const OperacionOffline({
     required this.opId,
     required this.pedidoId,
     required this.tipoOperacion,
@@ -16,6 +16,21 @@ class OperacionOffline {
     this.intentos = 0,
     this.estadoSync = 'PENDIENTE',
   });
+
+  OperacionOffline copyWith({
+    int? intentos,
+    String? estadoSync,
+  }) {
+    return OperacionOffline(
+      opId: opId,
+      pedidoId: pedidoId,
+      tipoOperacion: tipoOperacion,
+      payloadJson: payloadJson,
+      creadoEnMs: creadoEnMs,
+      intentos: intentos ?? this.intentos,
+      estadoSync: estadoSync ?? this.estadoSync,
+    );
+  }
 
   factory OperacionOffline.fromMap(Map<String, dynamic> map) {
     return OperacionOffline(

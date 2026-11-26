@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../entity/operacion_offline.dart';
@@ -10,6 +11,10 @@ class DbLocalControl {
 
   Database? _db;
 
+  // Almacenamiento fallback en memoria para compilación Web (kIsWeb)
+  final Map<String, Pedido> _webPedidos = {};
+  final Map<String, OperacionOffline> _webCola = {};
+
   Future<Database> get database async {
     if (_db != null) return _db!;
     _db = await _initDb();
@@ -18,7 +23,7 @@ class DbLocalControl {
 
   Future<Database> _initDb() async {
     final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'reparto_offline.db');
+    final path = join(dbPath, 'swoosh_offline.db');
 
     return await openDatabase(
       path,
@@ -56,7 +61,16 @@ class DbLocalControl {
     );
   }
 
+  // --- Operaciones sobre pedidos_local ---
+
   Future<void> guardarPedidos(List<Pedido> pedidos) async {
+    if (kIsWeb) {
+      for (final p in pedidos) {
+        _webPedidos[p.id] = p;
+      }
+      return;
+    }
+
     final db = await database;
     final batch = db.batch();
     for (final p in pedidos) {
@@ -70,6 +84,11 @@ class DbLocalControl {
   }
 
   Future<void> guardarPedido(Pedido pedido) async {
+    if (kIsWeb) {
+      _webPedidos[pedido.id] = pedido;
+      return;
+    }
+
     final db = await database;
     await db.insert(
       'pedidos_local',
@@ -79,8 +98,14 @@ class DbLocalControl {
   }
 
   Future<List<Pedido>> obtenerPedidos({String? repartidorId}) async {
+    if (kIsWeb) {
+      final lista = _webPedidos.values.toList();
+      if (repartidorId == null || repartidorId.isEmpty) return lista;
+      return lista.where((p) => p.repartidorId == repartidorId).toList();
+    }
+
     final db = await database;
-    final maps = repartidorId != null
+    final maps = (repartidorId != null && repartidorId.isNotEmpty)
         ? await db.query(
             'pedidos_local',
             where: 'repartidor_id = ?',
@@ -91,6 +116,10 @@ class DbLocalControl {
   }
 
   Future<Pedido?> obtenerPedidoPorId(String id) async {
+    if (kIsWeb) {
+      return _webPedidos[id];
+    }
+
     final db = await database;
     final maps = await db.query(
       'pedidos_local',
@@ -102,7 +131,24 @@ class DbLocalControl {
     return Pedido.fromMap(maps.first);
   }
 
+  Future<void> eliminarPedidoLocal(String id) async {
+    if (kIsWeb) {
+      _webPedidos.remove(id);
+      return;
+    }
+
+    final db = await database;
+    await db.delete('pedidos_local', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // --- Operaciones sobre cola_operaciones ---
+
   Future<void> encolarOperacion(OperacionOffline op) async {
+    if (kIsWeb) {
+      _webCola[op.opId] = op;
+      return;
+    }
+
     final db = await database;
     await db.insert(
       'cola_operaciones',
@@ -112,6 +158,14 @@ class DbLocalControl {
   }
 
   Future<List<OperacionOffline>> obtenerOperacionesPendientes() async {
+    if (kIsWeb) {
+      final pendientes = _webCola.values
+          .where((op) => op.estadoSync == 'PENDIENTE')
+          .toList()
+        ..sort((a, b) => a.creadoEnMs.compareTo(b.creadoEnMs));
+      return pendientes;
+    }
+
     final db = await database;
     final maps = await db.query(
       'cola_operaciones',
@@ -122,7 +176,16 @@ class DbLocalControl {
     return maps.map((m) => OperacionOffline.fromMap(m)).toList();
   }
 
+  Future<Set<String>> obtenerPedidoIdsConPendientes() async {
+    final ops = await obtenerOperacionesPendientes();
+    return ops.map((op) => op.pedidoId).toSet();
+  }
+
   Future<int> contarPendientes() async {
+    if (kIsWeb) {
+      return _webCola.values.where((op) => op.estadoSync == 'PENDIENTE').length;
+    }
+
     final db = await database;
     final res = await db.rawQuery(
       "SELECT COUNT(*) as total FROM cola_operaciones WHERE estado_sync = 'PENDIENTE'",
@@ -131,6 +194,14 @@ class DbLocalControl {
   }
 
   Future<void> marcarOperacionEstado(String opId, String estadoSync) async {
+    if (kIsWeb) {
+      final actual = _webCola[opId];
+      if (actual != null) {
+        _webCola[opId] = actual.copyWith(estadoSync: estadoSync);
+      }
+      return;
+    }
+
     final db = await database;
     await db.update(
       'cola_operaciones',
@@ -141,6 +212,14 @@ class DbLocalControl {
   }
 
   Future<void> incrementarIntento(String opId) async {
+    if (kIsWeb) {
+      final actual = _webCola[opId];
+      if (actual != null) {
+        _webCola[opId] = actual.copyWith(intentos: actual.intentos + 1);
+      }
+      return;
+    }
+
     final db = await database;
     await db.rawUpdate(
       'UPDATE cola_operaciones SET intentos = intentos + 1 WHERE op_id = ?',

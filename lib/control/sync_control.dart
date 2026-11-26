@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:http/http.dart' as http;
 import '../entity/pedido.dart';
 import 'db_local_control.dart';
@@ -11,15 +13,20 @@ class SyncControl {
   StreamSubscription<List<ConnectivityResult>>? _sub;
   bool _sincronizando = false;
 
-  /// Último tiempo de sincronización medido en milisegundos (Tsync para metrología 10.2)
+  /// Último tiempo de sincronización medido en milisegundos (Tsync para metrología)
   int? ultimoTsyncMs;
 
-  SyncControl({
-    this.baseUrl = const String.fromEnvironment(
-      'API_URL',
-      defaultValue: 'http://10.0.2.2:3000',
-    ),
-  });
+  SyncControl({String? baseUrl}) : baseUrl = baseUrl ?? _resolverUrlPorDefecto();
+
+  static String _resolverUrlPorDefecto() {
+    const definida = String.fromEnvironment('API_URL', defaultValue: '');
+    if (definida.isNotEmpty) return definida;
+    if (kIsWeb) return 'http://localhost:3000';
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:3000';
+    }
+    return 'http://localhost:3000';
+  }
 
   void iniciarMonitorRed() {
     _sub?.cancel();
@@ -36,11 +43,16 @@ class SyncControl {
   }
 
   Future<bool> tieneConexion() async {
-    final res = await Connectivity().checkConnectivity();
-    return res.any((r) => r != ConnectivityResult.none);
+    try {
+      final res = await Connectivity().checkConnectivity();
+      return res.any((r) => r != ConnectivityResult.none);
+    } catch (_) {
+      return true;
+    }
   }
 
-  Future<void> sincronizarAhora() async {
+  /// Envía todas las operaciones pendientes de la cola offline y descarga datos remotos.
+  Future<void> sincronizarAhora({String? repartidorId}) async {
     if (_sincronizando) return;
     if (!await tieneConexion()) return;
 
@@ -52,25 +64,7 @@ class SyncControl {
 
       for (final op in pendientes) {
         try {
-          if (op.tipoOperacion == 'ACTUALIZAR_ESTADO') {
-            final res = await http
-                .patch(
-                  Uri.parse('$baseUrl/api/v1/pedidos/${op.pedidoId}/estado'),
-                  headers: {'Content-Type': 'application/json'},
-                  body: op.payloadJson,
-                )
-                .timeout(const Duration(seconds: 5));
-
-            if (res.statusCode == 200) {
-              await _db.marcarOperacionEstado(op.opId, 'ENVIADA');
-              final actualizado = Pedido.fromJson(jsonDecode(res.body));
-              await _db.guardarPedido(actualizado);
-            } else if (res.statusCode == 409) {
-              await _db.marcarOperacionEstado(op.opId, 'CONFLICTO');
-            } else {
-              await _db.incrementarIntento(op.opId);
-            }
-          } else if (op.tipoOperacion == 'CREAR_PEDIDO') {
+          if (op.tipoOperacion == 'CREAR_PEDIDO') {
             final res = await http
                 .post(
                   Uri.parse('$baseUrl/api/v1/pedidos'),
@@ -81,8 +75,35 @@ class SyncControl {
 
             if (res.statusCode == 201 || res.statusCode == 200) {
               await _db.marcarOperacionEstado(op.opId, 'ENVIADA');
-              final creado = Pedido.fromJson(jsonDecode(res.body));
+              final creado = Pedido.fromJson(
+                jsonDecode(res.body) as Map<String, dynamic>,
+              );
+              if (creado.id != op.pedidoId) {
+                await _db.eliminarPedidoLocal(op.pedidoId);
+              }
               await _db.guardarPedido(creado);
+            } else if (res.statusCode == 409) {
+              await _db.marcarOperacionEstado(op.opId, 'CONFLICTO');
+            } else {
+              await _db.incrementarIntento(op.opId);
+            }
+          } else if (op.tipoOperacion == 'ACTUALIZAR_ESTADO') {
+            final res = await http
+                .patch(
+                  Uri.parse('$baseUrl/api/v1/pedidos/${op.pedidoId}/estado'),
+                  headers: {'Content-Type': 'application/json'},
+                  body: op.payloadJson,
+                )
+                .timeout(const Duration(seconds: 5));
+
+            if (res.statusCode == 200) {
+              await _db.marcarOperacionEstado(op.opId, 'ENVIADA');
+              final actualizado = Pedido.fromJson(
+                jsonDecode(res.body) as Map<String, dynamic>,
+              );
+              await _db.guardarPedido(actualizado);
+            } else if (res.statusCode == 409) {
+              await _db.marcarOperacionEstado(op.opId, 'CONFLICTO');
             } else {
               await _db.incrementarIntento(op.opId);
             }
@@ -92,7 +113,7 @@ class SyncControl {
         }
       }
 
-      await descargarPedidosRemotos();
+      await descargarPedidosRemotos(repartidorId: repartidorId);
 
       cronometro.stop();
       if (pendientes.isNotEmpty) {
@@ -103,20 +124,34 @@ class SyncControl {
     }
   }
 
-  Future<void> descargarPedidosRemotos() async {
+  Future<void> descargarPedidosRemotos({String? repartidorId}) async {
     try {
-      final res = await http
-          .get(Uri.parse('$baseUrl/api/v1/pedidos'))
-          .timeout(const Duration(seconds: 5));
+      final uri = Uri.parse('$baseUrl/api/v1/pedidos').replace(
+        queryParameters: (repartidorId != null && repartidorId.isNotEmpty)
+            ? {'repartidor_id': repartidorId}
+            : null,
+      );
+
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
 
       if (res.statusCode == 200) {
-        final List<dynamic> lista = jsonDecode(res.body);
-        final pedidos = lista.map((e) => Pedido.fromJson(e)).toList();
-        await _db.guardarPedidos(pedidos);
+        final List<dynamic> lista = jsonDecode(res.body) as List<dynamic>;
+        final remotos = lista
+            .map((e) => Pedido.fromJson(e as Map<String, dynamic>))
+            .toList();
+
+        // No sobrescribir pedidos locales que aún tienen operaciones pendientes en cola
+        final idsConPendientes = await _db.obtenerPedidoIdsConPendientes();
+        final paraGuardar = remotos
+            .where((p) => !idsConPendientes.contains(p.id))
+            .toList();
+
+        await _db.guardarPedidos(paraGuardar);
       }
     } catch (_) {}
   }
 
+  /// Solicita el orden óptimo de paradas al endpoint POST /api/v1/rutas/optimizar
   Future<List<String>?> solicitarRutaOptimizada({
     required String repartidorId,
     required Ubicacion origen,
@@ -145,8 +180,11 @@ class SyncControl {
           .timeout(const Duration(seconds: 5));
 
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        return List<String>.from(data['orden']);
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final orden = data['orden'];
+        if (orden is List) {
+          return orden.map((e) => e.toString()).toList();
+        }
       }
     } catch (_) {}
     return null;

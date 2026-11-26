@@ -2,7 +2,7 @@ class Ubicacion {
   final double lat;
   final double lng;
 
-  Ubicacion({required this.lat, required this.lng});
+  const Ubicacion({required this.lat, required this.lng});
 
   factory Ubicacion.fromJson(Map<String, dynamic> json) {
     return Ubicacion(
@@ -27,7 +27,7 @@ class Pedido {
   final String? entregadoEn;
   final bool sincronizado;
 
-  Pedido({
+  const Pedido({
     required this.id,
     this.rev,
     required this.cliente,
@@ -42,22 +42,28 @@ class Pedido {
   });
 
   Pedido copyWith({
+    String? id,
     String? rev,
+    String? cliente,
+    String? direccion,
+    Ubicacion? ubicacion,
+    double? total,
     String? estado,
     String? repartidorId,
+    String? creadoEn,
     String? entregadoEn,
     bool? sincronizado,
   }) {
     return Pedido(
-      id: id,
+      id: id ?? this.id,
       rev: rev ?? this.rev,
-      cliente: cliente,
-      direccion: direccion,
-      ubicacion: ubicacion,
-      total: total,
+      cliente: cliente ?? this.cliente,
+      direccion: direccion ?? this.direccion,
+      ubicacion: ubicacion ?? this.ubicacion,
+      total: total ?? this.total,
       estado: estado ?? this.estado,
       repartidorId: repartidorId ?? this.repartidorId,
-      creadoEn: creadoEn,
+      creadoEn: creadoEn ?? this.creadoEn,
       entregadoEn: entregadoEn ?? this.entregadoEn,
       sincronizado: sincronizado ?? this.sincronizado,
     );
@@ -67,16 +73,16 @@ class Pedido {
     return Pedido(
       id: (json['_id'] ?? json['id']).toString(),
       rev: json['_rev']?.toString(),
-      cliente: json['cliente'] ?? 'Sin nombre',
-      direccion: json['direccion'] ?? '',
-      ubicacion: json['ubicacion'] != null
-          ? Ubicacion.fromJson(json['ubicacion'])
+      cliente: json['cliente']?.toString() ?? 'Sin nombre',
+      direccion: json['direccion']?.toString() ?? '',
+      ubicacion: json['ubicacion'] is Map<String, dynamic>
+          ? Ubicacion.fromJson(json['ubicacion'] as Map<String, dynamic>)
           : Ubicacion(
               lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
               lng: (json['lng'] as num?)?.toDouble() ?? 0.0,
             ),
       total: (json['total'] as num?)?.toDouble() ?? 0.0,
-      estado: json['estado'] ?? 'pendiente',
+      estado: json['estado']?.toString() ?? 'pendiente',
       repartidorId: json['repartidor_id']?.toString(),
       creadoEn: json['creado_en']?.toString(),
       entregadoEn: json['entregado_en']?.toString(),
@@ -87,12 +93,12 @@ class Pedido {
   Map<String, dynamic> toApiJson() {
     return {
       'id': id,
-      if (rev != null) '_rev': rev,
       'cliente': cliente,
       'direccion': direccion,
       'ubicacion': ubicacion.toJson(),
       'total': total,
       'estado': estado,
+      if (rev != null) '_rev': rev,
       if (repartidorId != null) 'repartidor_id': repartidorId,
       if (creadoEn != null) 'creado_en': creadoEn,
       if (entregadoEn != null) 'entregado_en': entregadoEn,
