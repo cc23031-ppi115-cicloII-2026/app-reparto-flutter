@@ -27,20 +27,28 @@ class DbLocalControl {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE pedidos_local (
             id TEXT PRIMARY KEY,
             rev TEXT,
             cliente TEXT NOT NULL,
+            titulo_parada TEXT,
             direccion TEXT NOT NULL,
+            referencia_visual TEXT,
             lat REAL NOT NULL,
             lng REAL NOT NULL,
             total REAL NOT NULL,
+            subtotal_productos REAL,
+            costo_envio REAL DEFAULT 0.0,
+            metodo_pago TEXT DEFAULT 'efectivo',
+            paga_con REAL,
+            orden_en_ruta INTEGER,
             estado TEXT NOT NULL,
             repartidor_id TEXT,
             creado_en TEXT,
+            inicio_ruta_en TEXT,
             entregado_en TEXT,
             sincronizado INTEGER NOT NULL DEFAULT 1
           )
@@ -57,6 +65,27 @@ class DbLocalControl {
             estado_sync TEXT NOT NULL DEFAULT 'PENDIENTE'
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          final nuevasColumnas = [
+            'ALTER TABLE pedidos_local ADD COLUMN titulo_parada TEXT',
+            'ALTER TABLE pedidos_local ADD COLUMN referencia_visual TEXT',
+            'ALTER TABLE pedidos_local ADD COLUMN subtotal_productos REAL',
+            'ALTER TABLE pedidos_local ADD COLUMN costo_envio REAL DEFAULT 0.0',
+            "ALTER TABLE pedidos_local ADD COLUMN metodo_pago TEXT DEFAULT 'efectivo'",
+            'ALTER TABLE pedidos_local ADD COLUMN paga_con REAL',
+            'ALTER TABLE pedidos_local ADD COLUMN orden_en_ruta INTEGER',
+            'ALTER TABLE pedidos_local ADD COLUMN inicio_ruta_en TEXT',
+          ];
+          for (final sql in nuevasColumnas) {
+            try {
+              await db.execute(sql);
+            } catch (_) {
+              // Ignorar si la columna ya existe
+            }
+          }
+        }
       },
     );
   }

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
+import '../../control/db_local_control.dart';
 import '../../control/pedido_control.dart';
 import '../../entity/pedido.dart';
 import '../../theme/swoosh_colors.dart';
@@ -55,27 +56,44 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
           Pedido(
             id: 'demo-1',
             cliente: 'Comedor La Ceiba',
+            tituloParada: 'Comedor La Ceiba · Centro',
             direccion: 'Av. Independencia Sur, Santa Ana',
+            referenciaVisual: 'Portón negro frente a parqueo',
             ubicacion: Ubicacion(lat: 13.9942, lng: -89.5597),
             total: 14.50,
+            subtotalProductos: 13.00,
+            costoEnvio: 1.50,
+            metodoPago: 'efectivo',
+            pagaCon: 20.00,
             estado: 'asignado',
             repartidorId: _repartidorId,
           ),
           Pedido(
             id: 'demo-2',
             cliente: 'Tienda El Progreso',
-            direccion: 'Col. El Palmar, Santa Ana',
+            tituloParada: 'Tienda El Progreso · Col. El Palmar',
+            direccion: 'Calle Principal, Col. El Palmar, Santa Ana',
+            referenciaVisual: 'Casa esquina rótulo azul',
             ubicacion: Ubicacion(lat: 13.9875, lng: -89.5640),
             total: 22.00,
+            subtotalProductos: 20.00,
+            costoEnvio: 2.00,
+            metodoPago: 'transferencia',
             estado: 'pendiente',
             repartidorId: _repartidorId,
           ),
           Pedido(
             id: 'demo-3',
             cliente: 'Pupusería Doña María',
-            direccion: 'Barrio San Juan, Santa Ana',
+            tituloParada: 'Pupusería Doña María · Barrio San Juan',
+            direccion: '4a Calle Oriente, Barrio San Juan, Santa Ana',
+            referenciaVisual: 'Frente a tienda',
             ubicacion: Ubicacion(lat: 13.9990, lng: -89.5521),
             total: 9.75,
+            subtotalProductos: 8.50,
+            costoEnvio: 1.25,
+            metodoPago: 'efectivo',
+            pagaCon: 10.00,
             estado: 'pendiente',
             repartidorId: _repartidorId,
           ),
@@ -92,7 +110,8 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
       }
-      if (perm == LocationPermission.whileInUse || perm == LocationPermission.always) {
+      if (perm == LocationPermission.whileInUse ||
+          perm == LocationPermission.always) {
         final pos = await Geolocator.getCurrentPosition();
         _ubicacionActual = Ubicacion(lat: pos.latitude, lng: pos.longitude);
       }
@@ -100,7 +119,8 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
   }
 
   Future<void> _refrescar() async {
-    final lista = await _pedidoControl.obtenerPedidos(repartidorId: _repartidorId);
+    final lista =
+        await _pedidoControl.obtenerPedidos(repartidorId: _repartidorId);
     final online = await _pedidoControl.hayConexion();
     final pend = await _pedidoControl.obtenerCantidadPendientes();
     final tsync = _pedidoControl.obtenerUltimoTsyncMs();
@@ -115,7 +135,8 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
     });
   }
 
-  Future<void> _crearPedido(String cliente, String dir, Ubicacion ubi, double total) async {
+  Future<void> _crearPedido(
+      String cliente, String dir, Ubicacion ubi, double total) async {
     if (_modoWebDemo) {
       setState(() {
         _pedidos.insert(
@@ -146,12 +167,44 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
     await _refrescar();
   }
 
+  Future<void> _crearPedidoCompleto(Pedido nuevo) async {
+    final conRepartidor = nuevo.copyWith(
+      repartidorId: _repartidorId,
+      estado: 'asignado',
+      sincronizado: _isOnline,
+    );
+
+    if (_modoWebDemo) {
+      setState(() {
+        _pedidos.insert(0, conRepartidor);
+        if (!_isOnline) _pendientesSync++;
+      });
+      return;
+    }
+
+    await _pedidoControl.crearPedido(
+      cliente: conRepartidor.cliente,
+      direccion: conRepartidor.direccion,
+      ubicacion: conRepartidor.ubicacion,
+      total: conRepartidor.total,
+      repartidorId: _repartidorId,
+    );
+    await DbLocalControl().guardarPedido(conRepartidor);
+    await _refrescar();
+  }
+
   Future<void> _cambiarEstado(Pedido pedido, String nuevoEstado) async {
     if (_modoWebDemo) {
       setState(() {
         final idx = _pedidos.indexWhere((p) => p.id == pedido.id);
         if (idx != -1) {
-          _pedidos[idx] = pedido.copyWith(estado: nuevoEstado, sincronizado: _isOnline);
+          _pedidos[idx] = pedido.copyWith(
+            estado: nuevoEstado,
+            entregadoEn: nuevoEstado == 'entregado'
+                ? DateTime.now().toUtc().toIso8601String()
+                : pedido.entregadoEn,
+            sincronizado: _isOnline,
+          );
           if (!_isOnline) _pendientesSync++;
         }
       });
@@ -174,7 +227,8 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       setState(() {
         final activos = _pedidos.where((p) => p.estado != 'entregado').toList()
           ..sort((a, b) => a.ubicacion.lat.compareTo(b.ubicacion.lat));
-        final entregados = _pedidos.where((p) => p.estado == 'entregado').toList();
+        final entregados =
+            _pedidos.where((p) => p.estado == 'entregado').toList();
         _pedidos = [...activos, ...entregados];
         _optimizando = false;
       });
@@ -189,7 +243,8 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
     if (!mounted) return;
     setState(() {
       if (ordenados.isNotEmpty) {
-        final entregados = _pedidos.where((p) => p.estado == 'entregado').toList();
+        final entregados =
+            _pedidos.where((p) => p.estado == 'entregado').toList();
         _pedidos = [...ordenados, ...entregados];
       }
       _optimizando = false;
@@ -218,12 +273,14 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
         ubicacionActual: _ubicacionActual,
         onCambiarEstado: _cambiarEstado,
         onCrearPedido: _crearPedido,
+        onCrearPedidoCompleto: _crearPedidoCompleto,
       ),
       MapaRutaModuleScreen(
         pedidos: _pedidos,
         ubicacionActual: _ubicacionActual,
         optimizando: _optimizando,
         onOptimizarRuta: _optimizarRuta,
+        onCambiarEstado: _cambiarEstado,
       ),
       ReplicacionModuleScreen(
         isOnline: _isOnline,
@@ -298,7 +355,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
           NavigationDestination(
             icon: Icon(Icons.analytics_outlined),
             selectedIcon: Icon(Icons.analytics, color: SwooshColors.azulPrimario),
-            label: 'Métricas',
+            label: 'Resumen',
           ),
         ],
       ),
