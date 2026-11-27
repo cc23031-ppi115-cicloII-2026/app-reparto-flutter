@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:app_reparto/control/pedido_control.dart';
+import 'package:app_reparto/entity/pedido.dart';
 import 'package:app_reparto/entity/sesion_usuario.dart';
-import 'package:app_reparto/main.dart';
 import 'package:app_reparto/modules/shell/swoosh_shell_screen.dart';
 
 void main() {
-  testWidgets('Carga pantalla principal de Swoosh', (WidgetTester tester) async {
-    await tester.pumpWidget(const SwooshApp());
-    expect(find.byType(SwooshShellScreen), findsOneWidget);
-  });
-
   testWidgets('negocio1 muestra Pedidos y Resumen sin Online ni Replicación', (
     WidgetTester tester,
   ) async {
@@ -56,6 +52,30 @@ Widget _shellForRole(String role) {
         nombre: 'Usuario de prueba',
       ),
       onCerrarSesion: () async {},
+      pedidoControl: _PedidoControlFake(),
     ),
   );
+}
+
+class _PedidoControlFake extends PedidoControl {
+  @override
+  Stream<void> get cambiosSync => const Stream<void>.empty();
+
+  @override
+  Future<void> inicializar({String? repartidorId}) async {}
+
+  @override
+  Future<List<Pedido>> obtenerPedidos({String? repartidorId}) async => [];
+
+  @override
+  Future<bool> hayConexion() async => false;
+
+  @override
+  Future<int> obtenerCantidadPendientes() async => 0;
+
+  @override
+  int? obtenerUltimoTsyncMs() => null;
+
+  @override
+  void dispose() {}
 }

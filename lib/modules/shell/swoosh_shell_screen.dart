@@ -1,8 +1,7 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:uuid/uuid.dart';
-import '../../control/db_local_control.dart';
 import '../../control/pedido_control.dart';
 import '../../entity/pedido.dart';
 import '../../entity/sesion_usuario.dart';
@@ -14,11 +13,13 @@ import '../metricas/metricas_module_screen.dart';
 class SwooshShellScreen extends StatefulWidget {
   final SesionUsuario sesion;
   final Future<void> Function() onCerrarSesion;
+  final PedidoControl? pedidoControl;
 
   const SwooshShellScreen({
     super.key,
     required this.sesion,
     required this.onCerrarSesion,
+    this.pedidoControl,
   });
 
   @override
@@ -26,8 +27,8 @@ class SwooshShellScreen extends StatefulWidget {
 }
 
 class _SwooshShellScreenState extends State<SwooshShellScreen> {
-  final PedidoControl _pedidoControl = PedidoControl();
-  final Uuid _uuid = const Uuid();
+  late final PedidoControl _pedidoControl;
+  StreamSubscription<void>? _syncSubscription;
 
   int _tabIndex = 0;
   List<Pedido> _pedidos = [];
@@ -36,7 +37,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
   bool _isOnline = false;
   int _pendientesSync = 0;
   int? _ultimoTsyncMs;
-  bool _modoWebDemo = false;
+  String? _errorInicializacion;
 
   Ubicacion _ubicacionActual = Ubicacion(lat: 13.9942, lng: -89.5597);
 
@@ -49,7 +50,18 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
   @override
   void initState() {
     super.initState();
+    _pedidoControl = widget.pedidoControl ?? PedidoControl();
+    _syncSubscription = _pedidoControl.cambiosSync.listen((_) {
+      unawaited(_refrescar());
+    });
     _inicializar();
+  }
+
+  @override
+  void dispose() {
+    _syncSubscription?.cancel();
+    _pedidoControl.dispose();
+    super.dispose();
   }
 
   @override
@@ -62,63 +74,14 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
 
   Future<void> _inicializar() async {
     try {
-      if (kIsWeb) throw UnsupportedError('sqflite en web');
-      await _pedidoControl.inicializar();
+      await _pedidoControl.inicializar(repartidorId: _filtroRepartidor);
       await _obtenerGps();
       await _refrescar();
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
-        _modoWebDemo = true;
-        _isOnline = true;
-        _ultimoTsyncMs = 68;
-        _pedidos = [
-          Pedido(
-            id: 'demo-1',
-            cliente: 'Comedor La Ceiba',
-            tituloParada: 'Comedor La Ceiba · Centro',
-            direccion: 'Av. Independencia Sur, Santa Ana',
-            referenciaVisual: 'Portón negro frente a parqueo',
-            ubicacion: Ubicacion(lat: 13.9942, lng: -89.5597),
-            total: 14.50,
-            subtotalProductos: 13.00,
-            costoEnvio: 1.50,
-            metodoPago: 'efectivo',
-            pagaCon: 20.00,
-            estado: 'asignado',
-            repartidorId: _repartidorActivoId,
-          ),
-          Pedido(
-            id: 'demo-2',
-            cliente: 'Tienda El Progreso',
-            tituloParada: 'Tienda El Progreso · Col. El Palmar',
-            direccion: 'Calle Principal, Col. El Palmar, Santa Ana',
-            referenciaVisual: 'Casa esquina rótulo azul',
-            ubicacion: Ubicacion(lat: 13.9875, lng: -89.5640),
-            total: 22.00,
-            subtotalProductos: 20.00,
-            costoEnvio: 2.00,
-            metodoPago: 'transferencia',
-            estado: 'pendiente',
-            repartidorId: _repartidorActivoId,
-          ),
-          Pedido(
-            id: 'demo-3',
-            cliente: 'Pupusería Doña María',
-            tituloParada: 'Pupusería Doña María · Barrio San Juan',
-            direccion: '4a Calle Oriente, Barrio San Juan, Santa Ana',
-            referenciaVisual: 'Frente a tienda',
-            ubicacion: Ubicacion(lat: 13.9990, lng: -89.5521),
-            total: 9.75,
-            subtotalProductos: 8.50,
-            costoEnvio: 1.25,
-            metodoPago: 'efectivo',
-            pagaCon: 10.00,
-            estado: 'pendiente',
-            repartidorId: _repartidorActivoId,
-          ),
-        ];
         _cargando = false;
+        _errorInicializacion = 'No se pudo abrir el almacenamiento local: $error';
       });
     }
   }
@@ -157,26 +120,6 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
 
   Future<void> _crearPedido(
       String cliente, String dir, Ubicacion ubi, double total) async {
-    if (_modoWebDemo) {
-      setState(() {
-        _pedidos.insert(
-          0,
-          Pedido(
-            id: _uuid.v4(),
-            cliente: cliente,
-            direccion: dir,
-            ubicacion: ubi,
-            total: total,
-            estado: 'asignado',
-            repartidorId: _repartidorActivoId,
-            sincronizado: _isOnline,
-          ),
-        );
-        if (!_isOnline) _pendientesSync++;
-      });
-      return;
-    }
-
     await _pedidoControl.crearPedido(
       cliente: cliente,
       direccion: dir,
@@ -194,43 +137,11 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       sincronizado: _isOnline,
     );
 
-    if (_modoWebDemo) {
-      setState(() {
-        _pedidos.insert(0, conRepartidor);
-        if (!_isOnline) _pendientesSync++;
-      });
-      return;
-    }
-
-    await _pedidoControl.crearPedido(
-      cliente: conRepartidor.cliente,
-      direccion: conRepartidor.direccion,
-      ubicacion: conRepartidor.ubicacion,
-      total: conRepartidor.total,
-      repartidorId: conRepartidor.repartidorId,
-    );
-    await DbLocalControl().guardarPedido(conRepartidor);
+    await _pedidoControl.crearPedidoCompleto(conRepartidor);
     await _refrescar();
   }
 
   Future<void> _cambiarEstado(Pedido pedido, String nuevoEstado) async {
-    if (_modoWebDemo) {
-      setState(() {
-        final idx = _pedidos.indexWhere((p) => p.id == pedido.id);
-        if (idx != -1) {
-          _pedidos[idx] = pedido.copyWith(
-            estado: nuevoEstado,
-            entregadoEn: nuevoEstado == 'entregado'
-                ? DateTime.now().toUtc().toIso8601String()
-                : pedido.entregadoEn,
-            sincronizado: _isOnline,
-          );
-          if (!_isOnline) _pendientesSync++;
-        }
-      });
-      return;
-    }
-
     await _pedidoControl.actualizarEstadoPedido(
       pedidoId: pedido.id,
       nuevoEstado: nuevoEstado,
@@ -241,20 +152,6 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
 
   Future<void> _optimizarRuta() async {
     setState(() => _optimizando = true);
-    if (_modoWebDemo) {
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (!mounted) return;
-      setState(() {
-        final activos = _pedidos.where((p) => p.estado != 'entregado').toList()
-          ..sort((a, b) => a.ubicacion.lat.compareTo(b.ubicacion.lat));
-        final entregados =
-            _pedidos.where((p) => p.estado == 'entregado').toList();
-        _pedidos = [...activos, ...entregados];
-        _optimizando = false;
-      });
-      return;
-    }
-
     await _obtenerGps();
     final ordenados = await _pedidoControl.obtenerRutaOptimizada(
       repartidorId: _repartidorActivoId,
@@ -368,6 +265,13 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
+          : _errorInicializacion != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(_errorInicializacion!, textAlign: TextAlign.center),
+                  ),
+                )
           : pantallas[indiceSeguro],
       bottomNavigationBar: destinos.length == 1
           ? _barraDestinoUnico(context, destinos.single)

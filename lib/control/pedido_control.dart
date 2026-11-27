@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import '../entity/operacion_offline.dart';
@@ -7,15 +8,22 @@ import 'sync_control.dart';
 
 class PedidoControl {
   final DbLocalControl _db = DbLocalControl();
-  final SyncControl _sync = SyncControl();
+  final SyncControl _sync;
   final Uuid _uuid = const Uuid();
 
-  /// 1. Inicializa DB local, monitor de red, sincronización y carga datos demo si está vacío.
-  Future<void> inicializar() async {
-    _sync.iniciarMonitorRed();
-    await _sync.sincronizarAhora();
-    await cargarDatosDemoSiVacio();
+  PedidoControl({SyncControl? syncControl})
+      : _sync = syncControl ?? SyncControl();
+
+  /// 1. Inicializa DB local, monitor de red y sincronización.
+  Stream<void> get cambiosSync => _sync.cambiosSync;
+
+  Future<void> inicializar({String? repartidorId}) async {
+    await _db.eliminarPedidosDePruebaConocidos();
+    _sync.iniciarMonitorRed(repartidorId: repartidorId);
+    await _sync.sincronizarAhora(repartidorId: repartidorId);
   }
+
+  void dispose() => _sync.dispose();
 
   /// 2. Devuelve todos los pedidos locales (funciona offline).
   Future<List<Pedido>> obtenerPedidos({String? repartidorId}) async {
@@ -42,17 +50,34 @@ class PedidoControl {
       sincronizado: false,
     );
 
-    await _db.guardarPedido(nuevo);
-    await _db.encolarOperacion(OperacionOffline(
+    await _db.guardarPedidoYEncolarOperaciones(nuevo, [OperacionOffline(
       opId: _uuid.v4(),
       pedidoId: nuevo.id,
       tipoOperacion: 'CREAR_PEDIDO',
       payloadJson: jsonEncode(nuevo.toApiJson()),
       creadoEnMs: DateTime.now().millisecondsSinceEpoch,
-    ));
+    )]);
 
     _sync.sincronizarAhora(repartidorId: nuevo.repartidorId);
     return nuevo;
+  }
+
+  Future<void> crearPedidoCompleto(Pedido pedido) async {
+    final nuevo = pedido.copyWith(
+      repartidorId: pedido.repartidorId ?? 'rep-1',
+      estado: 'asignado',
+      creadoEn: pedido.creadoEn ?? DateTime.now().toUtc().toIso8601String(),
+      sincronizado: false,
+    );
+
+    await _db.guardarPedidoYEncolarOperaciones(nuevo, [OperacionOffline(
+      opId: _uuid.v4(),
+      pedidoId: nuevo.id,
+      tipoOperacion: 'CREAR_PEDIDO',
+      payloadJson: jsonEncode(nuevo.toApiJson()),
+      creadoEnMs: DateTime.now().millisecondsSinceEpoch,
+    )]);
+    unawaited(_sync.sincronizarAhora(repartidorId: nuevo.repartidorId));
   }
 
   /// 4. Actualiza el estado localmente (ej. 'entregado'), encola 'ACTUALIZAR_ESTADO' y sincroniza.
@@ -63,38 +88,52 @@ class PedidoControl {
   }) async {
     final actual = await _db.obtenerPedidoPorId(pedidoId);
     if (actual == null) return;
+    if (actual.estado == nuevoEstado) return;
+
+    final pendientesLocales = await _db.obtenerOperacionesPendientes();
+    final creacionPendiente = pendientesLocales.any((operacion) =>
+      operacion.pedidoId == pedidoId &&
+      operacion.tipoOperacion == 'CREAR_PEDIDO');
+    final estadoBase = creacionPendiente ? 'pendiente' : actual.estado;
+
+    final estados = nuevoEstado == 'entregado'
+      ? switch (estadoBase) {
+            'pendiente' => ['asignado', 'en_ruta', 'entregado'],
+            'asignado' => ['en_ruta', 'entregado'],
+            'en_ruta' => ['entregado'],
+            _ => <String>[],
+          }
+        : [nuevoEstado];
+    if (estados.isEmpty) return;
 
     final ahoraIso = DateTime.now().toUtc().toIso8601String();
-    final entregadoEn = nuevoEstado == 'entregado' ? ahoraIso : actual.entregadoEn;
+    final repId = repartidorId ?? actual.repartidorId;
+    var actualizado = actual;
+    final operaciones = <OperacionOffline>[];
 
-    final actualizado = actual.copyWith(
-      estado: nuevoEstado,
-      repartidorId: repartidorId ?? actual.repartidorId,
-      entregadoEn: entregadoEn,
-      sincronizado: false,
-    );
+    for (final estado in estados) {
+      final entregadoEn = estado == 'entregado' ? ahoraIso : actualizado.entregadoEn;
+      actualizado = actualizado.copyWith(
+        estado: estado,
+        repartidorId: repId,
+        entregadoEn: entregadoEn,
+        sincronizado: false,
+      );
 
-    await _db.guardarPedido(actualizado);
-
-    final Map<String, dynamic> payloadMap = {'estado': nuevoEstado};
-    if (actualizado.repartidorId != null) {
-      payloadMap['repartidor_id'] = actualizado.repartidorId;
+      final payloadMap = <String, dynamic>{'estado': estado};
+      if (repId != null) payloadMap['repartidor_id'] = repId;
+      if (entregadoEn != null) payloadMap['entregado_en'] = entregadoEn;
+      operaciones.add(OperacionOffline(
+        opId: _uuid.v4(),
+        pedidoId: pedidoId,
+        tipoOperacion: 'ACTUALIZAR_ESTADO',
+        payloadJson: jsonEncode(payloadMap),
+        creadoEnMs: DateTime.now().millisecondsSinceEpoch,
+      ));
     }
-    if (entregadoEn != null) {
-      payloadMap['entregado_en'] = entregadoEn;
-    }
-    final payload = jsonEncode(payloadMap);
 
-    final op = OperacionOffline(
-      opId: _uuid.v4(),
-      pedidoId: pedidoId,
-      tipoOperacion: 'ACTUALIZAR_ESTADO',
-      payloadJson: payload,
-      creadoEnMs: DateTime.now().millisecondsSinceEpoch,
-    );
-    await _db.encolarOperacion(op);
-
-    _sync.sincronizarAhora(repartidorId: actualizado.repartidorId);
+    await _db.guardarPedidoYEncolarOperaciones(actualizado, operaciones);
+    unawaited(_sync.sincronizarAhora(repartidorId: actualizado.repartidorId));
   }
 
   /// 5. Llama a POST /api/v1/rutas/optimizar si hay red, o usa fallback local si está offline.
@@ -136,44 +175,4 @@ class PedidoControl {
   int? obtenerUltimoTsyncMs() => _sync.ultimoTsyncMs;
   Future<void> forzarSincronizacion() => _sync.sincronizarAhora();
 
-  Future<void> cargarDatosDemoSiVacio() async {
-    final existentes = await _db.obtenerPedidos();
-    if (existentes.isNotEmpty) return;
-
-    final ahora = DateTime.now().toUtc().toIso8601String();
-    final demo = [
-      Pedido(
-        id: _uuid.v4(),
-        cliente: 'Comedor La Ceiba',
-        direccion: 'Av. Independencia Sur, Santa Ana',
-        ubicacion: const Ubicacion(lat: 13.9942, lng: -89.5597),
-        total: 14.50,
-        estado: 'asignado',
-        repartidorId: 'rep-1',
-        creadoEn: ahora,
-      ),
-      Pedido(
-        id: _uuid.v4(),
-        cliente: 'Tienda El Progreso',
-        direccion: 'Col. El Palmar, Santa Ana',
-        ubicacion: const Ubicacion(lat: 13.9875, lng: -89.5640),
-        total: 22.00,
-        estado: 'pendiente',
-        repartidorId: 'rep-1',
-        creadoEn: ahora,
-      ),
-      Pedido(
-        id: _uuid.v4(),
-        cliente: 'Pupusería Doña María',
-        direccion: 'Barrio San Juan, Santa Ana',
-        ubicacion: const Ubicacion(lat: 13.9990, lng: -89.5521),
-        total: 9.75,
-        estado: 'pendiente',
-        repartidorId: 'rep-1',
-        creadoEn: ahora,
-      ),
-    ];
-
-    await _db.guardarPedidos(demo);
-  }
 }

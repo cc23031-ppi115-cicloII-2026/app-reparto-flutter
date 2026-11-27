@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'control/auth_control.dart';
+import 'control/database_bootstrap.dart';
 import 'entity/sesion_usuario.dart';
 import 'modules/auth/login_screen.dart';
 import 'modules/shell/swoosh_shell_screen.dart';
 import 'theme/swoosh_theme.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDatabaseForPlatform();
   runApp(const SwooshApp());
 }
 

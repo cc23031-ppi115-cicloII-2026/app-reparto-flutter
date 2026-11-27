@@ -5,6 +5,27 @@ import 'package:latlong2/latlong.dart';
 import '../../entity/pedido.dart';
 import '../../theme/swoosh_colors.dart';
 
+class BotonMarcarComoEntregado extends StatelessWidget {
+  final VoidCallback onPressed;
+
+  const BotonMarcarComoEntregado({
+    super.key,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton(
+      onPressed: onPressed,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: SwooshColors.azulPrimario,
+        foregroundColor: Colors.white,
+      ),
+      child: const Text('Marcar como entregado'),
+    );
+  }
+}
+
 class MapaRutaModuleScreen extends StatefulWidget {
   final List<Pedido> pedidos;
   final Ubicacion ubicacionActual;
@@ -472,15 +493,9 @@ class _MapaRutaModuleScreenState extends State<MapaRutaModuleScreen> {
                                 ],
                               ),
                               if (widget.onCambiarEstado != null)
-                                ElevatedButton.icon(
+                                BotonMarcarComoEntregado(
                                   onPressed: () =>
                                       widget.onCambiarEstado!(p, 'entregado'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green.shade700,
-                                    foregroundColor: Colors.white,
-                                  ),
-                                  icon: const Icon(Icons.check_circle, size: 18),
-                                  label: const Text('Entregado'),
                                 ),
                             ],
                           ),

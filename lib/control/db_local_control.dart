@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../entity/operacion_offline.dart';
@@ -11,12 +10,6 @@ class DbLocalControl {
   DbLocalControl._internal();
 
   Database? _db;
-
-  // Almacenamiento fallback en memoria para compilación Web (kIsWeb)
-  final Map<String, Pedido> _webPedidos = {};
-  final Map<String, OperacionOffline> _webCola = {};
-  SesionUsuario? _webSesionActiva;
-  final Map<String, Map<String, dynamic>> _webUsuariosCache = {};
 
   Future<Database> get database async {
     if (_db != null) return _db!;
@@ -123,17 +116,6 @@ class DbLocalControl {
   // --- Operaciones de Sesión y Caché Offline de Usuarios ---
 
   Future<void> guardarSesionActiva(SesionUsuario sesion, {String? password}) async {
-    if (kIsWeb) {
-      _webSesionActiva = sesion;
-      if (password != null && password.isNotEmpty) {
-        _webUsuariosCache[sesion.usuario.toLowerCase()] = {
-          ...sesion.toJson(),
-          'password': password,
-        };
-      }
-      return;
-    }
-
     final db = await database;
     await db.insert(
       'sesion_activa',
@@ -165,8 +147,6 @@ class DbLocalControl {
   }
 
   Future<SesionUsuario?> obtenerSesionActiva() async {
-    if (kIsWeb) return _webSesionActiva;
-
     final db = await database;
     final maps = await db.query('sesion_activa', where: 'id = 1', limit: 1);
     if (maps.isEmpty) return null;
@@ -175,16 +155,6 @@ class DbLocalControl {
 
   Future<SesionUsuario?> autenticarOfflineCache(String usuario, String password) async {
     final key = usuario.trim().toLowerCase();
-    if (kIsWeb) {
-      final cached = _webUsuariosCache[key];
-      if (cached != null && cached['password'] == password) {
-        final sesion = SesionUsuario.fromJson(cached);
-        _webSesionActiva = sesion;
-        return sesion;
-      }
-      return null;
-    }
-
     final db = await database;
     final maps = await db.query(
       'usuarios_cache',
@@ -199,11 +169,6 @@ class DbLocalControl {
   }
 
   Future<void> cerrarSesionLocal() async {
-    if (kIsWeb) {
-      _webSesionActiva = null;
-      return;
-    }
-
     final db = await database;
     await db.delete('sesion_activa');
   }
@@ -211,13 +176,6 @@ class DbLocalControl {
   // --- Operaciones sobre pedidos_local ---
 
   Future<void> guardarPedidos(List<Pedido> pedidos) async {
-    if (kIsWeb) {
-      for (final p in pedidos) {
-        _webPedidos[p.id] = p;
-      }
-      return;
-    }
-
     final db = await database;
     final batch = db.batch();
     for (final p in pedidos) {
@@ -231,11 +189,6 @@ class DbLocalControl {
   }
 
   Future<void> guardarPedido(Pedido pedido) async {
-    if (kIsWeb) {
-      _webPedidos[pedido.id] = pedido;
-      return;
-    }
-
     final db = await database;
     await db.insert(
       'pedidos_local',
@@ -244,29 +197,102 @@ class DbLocalControl {
     );
   }
 
-  Future<List<Pedido>> obtenerPedidos({String? repartidorId}) async {
-    if (kIsWeb) {
-      final lista = _webPedidos.values.toList();
-      if (repartidorId == null || repartidorId.isEmpty) return lista;
-      return lista.where((p) => p.repartidorId == repartidorId).toList();
-    }
+  Future<void> guardarPedidoYEncolarOperaciones(
+    Pedido pedido,
+    List<OperacionOffline> operaciones,
+  ) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert(
+        'pedidos_local',
+        pedido.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
 
+      final maximos = await txn.rawQuery(
+        'SELECT MAX(creado_en_ms) AS ultimo FROM cola_operaciones',
+      );
+      final ultimo = (maximos.first['ultimo'] as num?)?.toInt();
+      var creadoEnMs = DateTime.now().millisecondsSinceEpoch;
+      if (ultimo != null && creadoEnMs <= ultimo) creadoEnMs = ultimo + 1;
+
+      for (final operacion in operaciones) {
+        final datos = operacion.toMap()..['creado_en_ms'] = creadoEnMs++;
+        await txn.insert(
+          'cola_operaciones',
+          datos,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<List<Pedido>> obtenerPedidos({String? repartidorId}) async {
     final db = await database;
     final maps = (repartidorId != null && repartidorId.isNotEmpty)
         ? await db.query(
             'pedidos_local',
             where: 'repartidor_id = ?',
             whereArgs: [repartidorId],
+            orderBy: 'creado_en DESC',
           )
-        : await db.query('pedidos_local');
+        : await db.query('pedidos_local', orderBy: 'creado_en DESC');
     return maps.map((m) => Pedido.fromMap(m)).toList();
   }
 
-  Future<Pedido?> obtenerPedidoPorId(String id) async {
-    if (kIsWeb) {
-      return _webPedidos[id];
-    }
+  Future<void> eliminarPedidosDePruebaConocidos() async {
+    final db = await database;
+    const demoPedido =
+        '(cliente = ? AND direccion = ? AND total = ? AND lat = ? AND lng = ? '
+        'AND repartidor_id = ? AND rev IS NULL)';
+    final where = "id LIKE 'offline-%' OR id LIKE 'transicion-%' "
+        'OR cliente = ? OR $demoPedido OR $demoPedido OR $demoPedido';
+    final args = [
+      'Pedido creado offline',
+      'Comedor La Ceiba',
+      'Av. Independencia Sur, Santa Ana',
+      14.5,
+      13.9942,
+      -89.5597,
+      'rep-1',
+      'Tienda El Progreso',
+      'Col. El Palmar, Santa Ana',
+      22.0,
+      13.9875,
+      -89.564,
+      'rep-1',
+      'Pupusería Doña María',
+      'Barrio San Juan, Santa Ana',
+      9.75,
+      13.999,
+      -89.5521,
+      'rep-1',
+    ];
+    final rows = await db.query(
+      'pedidos_local',
+      columns: ['id'],
+      where: where,
+      whereArgs: args,
+    );
+    if (rows.isEmpty) return;
 
+    final ids = rows.map((row) => row['id'] as String).toList();
+    final placeholders = List.filled(ids.length, '?').join(', ');
+    await db.transaction((txn) async {
+      await txn.delete(
+        'cola_operaciones',
+        where: 'pedido_id IN ($placeholders)',
+        whereArgs: ids,
+      );
+      await txn.delete(
+        'pedidos_local',
+        where: 'id IN ($placeholders)',
+        whereArgs: ids,
+      );
+    });
+  }
+
+  Future<Pedido?> obtenerPedidoPorId(String id) async {
     final db = await database;
     final maps = await db.query(
       'pedidos_local',
@@ -279,11 +305,6 @@ class DbLocalControl {
   }
 
   Future<void> eliminarPedidoLocal(String id) async {
-    if (kIsWeb) {
-      _webPedidos.remove(id);
-      return;
-    }
-
     final db = await database;
     await db.delete('pedidos_local', where: 'id = ?', whereArgs: [id]);
   }
@@ -291,11 +312,6 @@ class DbLocalControl {
   // --- Operaciones sobre cola_operaciones ---
 
   Future<void> encolarOperacion(OperacionOffline op) async {
-    if (kIsWeb) {
-      _webCola[op.opId] = op;
-      return;
-    }
-
     final db = await database;
     await db.insert(
       'cola_operaciones',
@@ -305,14 +321,6 @@ class DbLocalControl {
   }
 
   Future<List<OperacionOffline>> obtenerOperacionesPendientes() async {
-    if (kIsWeb) {
-      final pendientes = _webCola.values
-          .where((op) => op.estadoSync == 'PENDIENTE')
-          .toList()
-        ..sort((a, b) => a.creadoEnMs.compareTo(b.creadoEnMs));
-      return pendientes;
-    }
-
     final db = await database;
     final maps = await db.query(
       'cola_operaciones',
@@ -324,15 +332,17 @@ class DbLocalControl {
   }
 
   Future<Set<String>> obtenerPedidoIdsConPendientes() async {
-    final ops = await obtenerOperacionesPendientes();
-    return ops.map((op) => op.pedidoId).toSet();
+    final db = await database;
+    final maps = await db.query(
+      'cola_operaciones',
+      columns: ['pedido_id'],
+      where: 'estado_sync IN (?, ?)',
+      whereArgs: ['PENDIENTE', 'CONFLICTO'],
+    );
+    return maps.map((map) => map['pedido_id'] as String).toSet();
   }
 
   Future<int> contarPendientes() async {
-    if (kIsWeb) {
-      return _webCola.values.where((op) => op.estadoSync == 'PENDIENTE').length;
-    }
-
     final db = await database;
     final res = await db.rawQuery(
       "SELECT COUNT(*) as total FROM cola_operaciones WHERE estado_sync = 'PENDIENTE'",
@@ -341,14 +351,6 @@ class DbLocalControl {
   }
 
   Future<void> marcarOperacionEstado(String opId, String estadoSync) async {
-    if (kIsWeb) {
-      final actual = _webCola[opId];
-      if (actual != null) {
-        _webCola[opId] = actual.copyWith(estadoSync: estadoSync);
-      }
-      return;
-    }
-
     final db = await database;
     await db.update(
       'cola_operaciones',
@@ -358,15 +360,19 @@ class DbLocalControl {
     );
   }
 
-  Future<void> incrementarIntento(String opId) async {
-    if (kIsWeb) {
-      final actual = _webCola[opId];
-      if (actual != null) {
-        _webCola[opId] = actual.copyWith(intentos: actual.intentos + 1);
-      }
-      return;
-    }
+  Future<void> marcarOperacionesPendientesDelPedidoComoConflicto(
+    String pedidoId,
+  ) async {
+    final db = await database;
+    await db.update(
+      'cola_operaciones',
+      {'estado_sync': 'CONFLICTO'},
+      where: 'pedido_id = ? AND estado_sync = ?',
+      whereArgs: [pedidoId, 'PENDIENTE'],
+    );
+  }
 
+  Future<void> incrementarIntento(String opId) async {
     final db = await database;
     await db.rawUpdate(
       'UPDATE cola_operaciones SET intentos = intentos + 1 WHERE op_id = ?',

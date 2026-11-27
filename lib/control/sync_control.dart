@@ -11,12 +11,17 @@ class SyncControl {
   final DbLocalControl _db = DbLocalControl();
   final String baseUrl;
   StreamSubscription<List<ConnectivityResult>>? _sub;
+  Timer? _reintentoTimer;
+  final StreamController<void> _cambiosSync = StreamController<void>.broadcast();
   bool _sincronizando = false;
+  bool _apiDisponible = false;
 
   /// Último tiempo de sincronización medido en milisegundos (Tsync para metrología)
   int? ultimoTsyncMs;
 
   SyncControl({String? baseUrl}) : baseUrl = baseUrl ?? _resolverUrlPorDefecto();
+
+  Stream<void> get cambiosSync => _cambiosSync.stream;
 
   static String _resolverUrlPorDefecto() {
     const definida = String.fromEnvironment('API_URL', defaultValue: '');
@@ -28,41 +33,56 @@ class SyncControl {
     return 'http://localhost:8080';
   }
 
-  void iniciarMonitorRed() {
+  void iniciarMonitorRed({String? repartidorId}) {
     _sub?.cancel();
-    _sub = Connectivity().onConnectivityChanged.listen((resultados) async {
+    _sub = Connectivity().onConnectivityChanged.listen((resultados) {
       final hayRed = resultados.any((r) => r != ConnectivityResult.none);
       if (hayRed) {
-        await sincronizarAhora();
+        unawaited(sincronizarAhora(repartidorId: repartidorId));
       }
+    });
+    _reintentoTimer?.cancel();
+    _reintentoTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      unawaited(sincronizarAhora(repartidorId: repartidorId));
     });
   }
 
   void detenerMonitorRed() {
     _sub?.cancel();
+    _reintentoTimer?.cancel();
+  }
+
+  void dispose() {
+    detenerMonitorRed();
+    unawaited(_cambiosSync.close());
   }
 
   Future<bool> tieneConexion() async {
     try {
-      final res = await Connectivity().checkConnectivity();
-      return res.any((r) => r != ConnectivityResult.none);
+      final res = await http
+          .get(Uri.parse('$baseUrl/health'))
+          .timeout(const Duration(seconds: 3));
+      _apiDisponible = res.statusCode == 200;
     } catch (_) {
-      return true;
+      _apiDisponible = false;
     }
+    return _apiDisponible;
   }
 
   /// Envía todas las operaciones pendientes de la cola offline y descarga datos remotos.
   Future<void> sincronizarAhora({String? repartidorId}) async {
     if (_sincronizando) return;
-    if (!await tieneConexion()) return;
-
     _sincronizando = true;
     final cronometro = Stopwatch()..start();
 
     try {
+      if (!await tieneConexion()) return;
+
       final pendientes = await _db.obtenerOperacionesPendientes();
+      final pedidosEnConflicto = <String>{};
 
       for (final op in pendientes) {
+        if (pedidosEnConflicto.contains(op.pedidoId)) continue;
         try {
           if (op.tipoOperacion == 'CREAR_PEDIDO') {
             final res = await http
@@ -81,11 +101,16 @@ class SyncControl {
               if (creado.id != op.pedidoId) {
                 await _db.eliminarPedidoLocal(op.pedidoId);
               }
-              await _db.guardarPedido(creado);
+              await _guardarPedidoSinPisarPendientes(creado, op.pedidoId);
             } else if (res.statusCode == 409) {
               await _db.marcarOperacionEstado(op.opId, 'CONFLICTO');
+              await _db.marcarOperacionesPendientesDelPedidoComoConflicto(
+                op.pedidoId,
+              );
+              pedidosEnConflicto.add(op.pedidoId);
             } else {
               await _db.incrementarIntento(op.opId);
+              break;
             }
           } else if (op.tipoOperacion == 'ACTUALIZAR_ESTADO') {
             final res = await http
@@ -101,19 +126,27 @@ class SyncControl {
               final actualizado = Pedido.fromJson(
                 jsonDecode(res.body) as Map<String, dynamic>,
               );
-              await _db.guardarPedido(actualizado);
+              await _guardarPedidoSinPisarPendientes(actualizado, op.pedidoId);
             } else if (res.statusCode == 409) {
               await _db.marcarOperacionEstado(op.opId, 'CONFLICTO');
+              await _db.marcarOperacionesPendientesDelPedidoComoConflicto(
+                op.pedidoId,
+              );
+              pedidosEnConflicto.add(op.pedidoId);
             } else {
               await _db.incrementarIntento(op.opId);
+              break;
             }
           }
         } catch (_) {
           await _db.incrementarIntento(op.opId);
+          break;
         }
       }
 
-      await descargarPedidosRemotos(repartidorId: repartidorId);
+      if (!await descargarPedidosRemotos(repartidorId: repartidorId)) {
+        _apiDisponible = false;
+      }
 
       cronometro.stop();
       if (pendientes.isNotEmpty) {
@@ -121,10 +154,11 @@ class SyncControl {
       }
     } finally {
       _sincronizando = false;
+      if (!_cambiosSync.isClosed) _cambiosSync.add(null);
     }
   }
 
-  Future<void> descargarPedidosRemotos({String? repartidorId}) async {
+  Future<bool> descargarPedidosRemotos({String? repartidorId}) async {
     try {
       final uri = Uri.parse('$baseUrl/api/v1/pedidos').replace(
         queryParameters: (repartidorId != null && repartidorId.isNotEmpty)
@@ -146,8 +180,32 @@ class SyncControl {
             .toList();
 
         await _db.guardarPedidos(paraGuardar);
+        return true;
       }
     } catch (_) {}
+    return false;
+  }
+
+  Future<void> _guardarPedidoSinPisarPendientes(
+    Pedido respuestaRemota,
+    String pedidoId,
+  ) async {
+    final quedanPendientes = (await _db.obtenerOperacionesPendientes())
+        .any((operacion) => operacion.pedidoId == pedidoId);
+    if (!quedanPendientes) {
+      await _db.guardarPedido(respuestaRemota);
+      return;
+    }
+
+    final local = await _db.obtenerPedidoPorId(pedidoId);
+    if (local == null) {
+      await _db.guardarPedido(respuestaRemota);
+      return;
+    }
+    await _db.guardarPedido(local.copyWith(
+      rev: respuestaRemota.rev,
+      sincronizado: false,
+    ));
   }
 
   /// Solicita el orden óptimo de paradas al endpoint POST /api/v1/rutas/optimizar

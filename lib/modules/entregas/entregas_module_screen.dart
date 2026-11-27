@@ -623,6 +623,10 @@ class EntregasModuleScreen extends StatelessWidget {
                                 : ElevatedButton.icon(
                                     onPressed: () =>
                                         onCambiarEstado(p, 'entregado'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: SwooshColors.azulPrimario,
+                                      foregroundColor: Colors.white,
+                                    ),
                                     icon: const Icon(Icons.check, size: 18),
                                     label: const Text('Entregar'),
                                   ),

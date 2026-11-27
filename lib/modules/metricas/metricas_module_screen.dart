@@ -19,19 +19,21 @@ class MetricasModuleScreen extends StatefulWidget {
 }
 
 class _MetricasModuleScreenState extends State<MetricasModuleScreen> {
-  String _filtroEstado = 'todos'; // todos, entregado, activos
-  String _filtroPago = 'todos'; // todos, efectivo, transferencia
+  String? _filtroEstado = 'todos'; // todos, entregado, activos
+  String? _filtroPago = 'todos'; // todos, efectivo, transferencia
   bool _verDiagnostico = false;
 
   @override
   Widget build(BuildContext context) {
     final filtrados = widget.pedidos.where((p) {
       final pasaEstado = switch (_filtroEstado) {
+        null => p.estado != 'cancelado',
         'entregado' => p.estado == 'entregado',
         'activos' => p.estado != 'entregado' && p.estado != 'cancelado',
         _ => p.estado != 'cancelado',
       };
       final pasaPago = switch (_filtroPago) {
+        null => true,
         'efectivo' => p.metodoPago == 'efectivo',
         'transferencia' => p.metodoPago != 'efectivo',
         _ => true,
@@ -41,6 +43,7 @@ class _MetricasModuleScreenState extends State<MetricasModuleScreen> {
 
     final entregados =
         widget.pedidos.where((p) => p.estado == 'entregado').toList();
+    final todos = widget.pedidos.where((p) => p.estado != 'cancelado').toList();
     final activos = widget.pedidos
         .where((p) => p.estado != 'entregado' && p.estado != 'cancelado')
         .toList();
@@ -107,7 +110,7 @@ class _MetricasModuleScreenState extends State<MetricasModuleScreen> {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              _chipFiltro('Todos (${widget.pedidos.length})', 'todos',
+              _chipFiltro('Todos (${todos.length})', 'todos',
                   _filtroEstado, (v) => setState(() => _filtroEstado = v)),
               const SizedBox(width: 6),
               _chipFiltro('Entregados (${entregados.length})', 'entregado',
@@ -328,8 +331,8 @@ class _MetricasModuleScreenState extends State<MetricasModuleScreen> {
   Widget _chipFiltro(
     String label,
     String valor,
-    String actual,
-    ValueChanged<String> onSelect,
+    String? actual,
+    ValueChanged<String?> onSelect,
   ) {
     final seleccionado = valor == actual;
     return ChoiceChip(
@@ -343,7 +346,7 @@ class _MetricasModuleScreenState extends State<MetricasModuleScreen> {
       ),
       selected: seleccionado,
       selectedColor: SwooshColors.azulPrimario,
-      onSelected: (_) => onSelect(valor),
+      onSelected: (seleccionar) => onSelect(seleccionar ? valor : null),
     );
   }
 
