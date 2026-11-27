@@ -9,6 +9,7 @@ class EntregasModuleScreen extends StatelessWidget {
   final List<Pedido> pedidos;
   final bool isOnline;
   final Ubicacion ubicacionActual;
+  final bool puedeCrearPedidos;
   final Future<void> Function(Pedido pedido, String nuevoEstado) onCambiarEstado;
   final Future<void> Function(
     String cliente,
@@ -23,6 +24,7 @@ class EntregasModuleScreen extends StatelessWidget {
     required this.pedidos,
     required this.isOnline,
     required this.ubicacionActual,
+    this.puedeCrearPedidos = true,
     required this.onCambiarEstado,
     required this.onCrearPedido,
     this.onCrearPedidoCompleto,
@@ -90,7 +92,6 @@ class EntregasModuleScreen extends StatelessWidget {
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
       builder: (ctx) {
-        // Precargar dirección inicial del pin apenas abre el modal
         Future.microtask(() {
           if (dirCtrl.text.isEmpty && ctx.mounted) {
             actualizarDireccionDesdeMapa(punto, (fn) {
@@ -220,7 +221,7 @@ class EntregasModuleScreen extends StatelessWidget {
                                 vertical: 5,
                               ),
                               decoration: BoxDecoration(
-                                color: SwooshColors.azulMarino.withOpacity(0.88),
+                                color: SwooshColors.azulMarino.withValues(alpha: 0.88),
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Text(
@@ -320,7 +321,7 @@ class EntregasModuleScreen extends StatelessWidget {
                     children: referenciasRapidas.map((ref) {
                       return ActionChip(
                         label: Text(ref, style: const TextStyle(fontSize: 11.5)),
-                        backgroundColor: SwooshColors.azulClaro.withOpacity(0.5),
+                        backgroundColor: SwooshColors.azulClaro.withValues(alpha: 0.5),
                         onPressed: () {
                           setModal(() {
                             refCtrl.text = ref;
@@ -350,7 +351,7 @@ class EntregasModuleScreen extends StatelessWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: DropdownButtonFormField<String>(
-                          value: metodoPago,
+                          initialValue: metodoPago,
                           decoration: const InputDecoration(
                             labelText: 'Cobro',
                             prefixIcon: Icon(
@@ -457,9 +458,11 @@ class EntregasModuleScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: pedidos.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
-                'No hay paradas registradas.\nPresiona "Nueva Parada" para marcar en el mapa.',
+                puedeCrearPedidos
+                    ? 'No hay paradas registradas.\nPresiona "Nueva Parada" para marcar en el mapa.'
+                    : 'No tienes entregas asignadas en este momento.',
                 textAlign: TextAlign.center,
               ),
             )
@@ -631,13 +634,15 @@ class EntregasModuleScreen extends StatelessWidget {
                 );
               },
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _abrirModalNuevoPedido(context),
-        backgroundColor: SwooshColors.azulMarino,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add_location_alt),
-        label: const Text('Nueva Parada'),
-      ),
+      floatingActionButton: puedeCrearPedidos
+          ? FloatingActionButton.extended(
+              onPressed: () => _abrirModalNuevoPedido(context),
+              backgroundColor: SwooshColors.azulMarino,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.add_location_alt),
+              label: const Text('Nueva Parada'),
+            )
+          : null,
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../../control/db_local_control.dart';
 import '../../control/pedido_control.dart';
 import '../../entity/pedido.dart';
+import '../../entity/sesion_usuario.dart';
 import '../../theme/swoosh_colors.dart';
 import '../entregas/entregas_module_screen.dart';
 import '../mapa_ruta/mapa_ruta_module_screen.dart';
@@ -12,7 +13,14 @@ import '../metricas/metricas_module_screen.dart';
 import '../replicacion/replicacion_module_screen.dart';
 
 class SwooshShellScreen extends StatefulWidget {
-  const SwooshShellScreen({super.key});
+  final SesionUsuario sesion;
+  final Future<void> Function() onCerrarSesion;
+
+  const SwooshShellScreen({
+    super.key,
+    required this.sesion,
+    required this.onCerrarSesion,
+  });
 
   @override
   State<SwooshShellScreen> createState() => _SwooshShellScreenState();
@@ -20,7 +28,6 @@ class SwooshShellScreen extends StatefulWidget {
 
 class _SwooshShellScreenState extends State<SwooshShellScreen> {
   final PedidoControl _pedidoControl = PedidoControl();
-  final String _repartidorId = 'rep-1';
   final Uuid _uuid = const Uuid();
 
   int _tabIndex = 0;
@@ -33,6 +40,12 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
   bool _modoWebDemo = false;
 
   Ubicacion _ubicacionActual = Ubicacion(lat: 13.9942, lng: -89.5597);
+
+  String get _repartidorActivoId =>
+      widget.sesion.repartidorId ?? 'rep-1';
+
+  String? get _filtroRepartidor =>
+      widget.sesion.esNegocio ? null : _repartidorActivoId;
 
   @override
   void initState() {
@@ -66,7 +79,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
             metodoPago: 'efectivo',
             pagaCon: 20.00,
             estado: 'asignado',
-            repartidorId: _repartidorId,
+            repartidorId: _repartidorActivoId,
           ),
           Pedido(
             id: 'demo-2',
@@ -80,7 +93,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
             costoEnvio: 2.00,
             metodoPago: 'transferencia',
             estado: 'pendiente',
-            repartidorId: _repartidorId,
+            repartidorId: _repartidorActivoId,
           ),
           Pedido(
             id: 'demo-3',
@@ -95,7 +108,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
             metodoPago: 'efectivo',
             pagaCon: 10.00,
             estado: 'pendiente',
-            repartidorId: _repartidorId,
+            repartidorId: _repartidorActivoId,
           ),
         ];
         _cargando = false;
@@ -120,7 +133,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
 
   Future<void> _refrescar() async {
     final lista =
-        await _pedidoControl.obtenerPedidos(repartidorId: _repartidorId);
+        await _pedidoControl.obtenerPedidos(repartidorId: _filtroRepartidor);
     final online = await _pedidoControl.hayConexion();
     final pend = await _pedidoControl.obtenerCantidadPendientes();
     final tsync = _pedidoControl.obtenerUltimoTsyncMs();
@@ -148,7 +161,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
             ubicacion: ubi,
             total: total,
             estado: 'asignado',
-            repartidorId: _repartidorId,
+            repartidorId: _repartidorActivoId,
             sincronizado: _isOnline,
           ),
         );
@@ -162,14 +175,14 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       direccion: dir,
       ubicacion: ubi,
       total: total,
-      repartidorId: _repartidorId,
+      repartidorId: _repartidorActivoId,
     );
     await _refrescar();
   }
 
   Future<void> _crearPedidoCompleto(Pedido nuevo) async {
     final conRepartidor = nuevo.copyWith(
-      repartidorId: _repartidorId,
+      repartidorId: nuevo.repartidorId ?? _repartidorActivoId,
       estado: 'asignado',
       sincronizado: _isOnline,
     );
@@ -187,7 +200,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       direccion: conRepartidor.direccion,
       ubicacion: conRepartidor.ubicacion,
       total: conRepartidor.total,
-      repartidorId: _repartidorId,
+      repartidorId: conRepartidor.repartidorId,
     );
     await DbLocalControl().guardarPedido(conRepartidor);
     await _refrescar();
@@ -214,7 +227,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
     await _pedidoControl.actualizarEstadoPedido(
       pedidoId: pedido.id,
       nuevoEstado: nuevoEstado,
-      repartidorId: _repartidorId,
+      repartidorId: pedido.repartidorId ?? _repartidorActivoId,
     );
     await _refrescar();
   }
@@ -237,7 +250,7 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
 
     await _obtenerGps();
     final ordenados = await _pedidoControl.obtenerRutaOptimizada(
-      repartidorId: _repartidorId,
+      repartidorId: _repartidorActivoId,
       origenActual: _ubicacionActual,
     );
     if (!mounted) return;
@@ -266,11 +279,14 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pantallas = [
+    final esNegocio = widget.sesion.esNegocio;
+
+    final pantallas = <Widget>[
       EntregasModuleScreen(
         pedidos: _pedidos,
         isOnline: _isOnline,
         ubicacionActual: _ubicacionActual,
+        puedeCrearPedidos: esNegocio,
         onCambiarEstado: _cambiarEstado,
         onCrearPedido: _crearPedido,
         onCrearPedidoCompleto: _crearPedidoCompleto,
@@ -292,25 +308,69 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
             ? () => setState(() => _isOnline = !_isOnline)
             : null,
       ),
-      MetricasModuleScreen(
-        pedidos: _pedidos,
-        ultimoTsyncMs: _ultimoTsyncMs,
-        pendientesSync: _pendientesSync,
-      ),
+      if (esNegocio)
+        MetricasModuleScreen(
+          pedidos: _pedidos,
+          ultimoTsyncMs: _ultimoTsyncMs,
+          pendientesSync: _pendientesSync,
+        ),
     ];
+
+    final destinos = <NavigationDestination>[
+      NavigationDestination(
+        icon: const Icon(Icons.list_alt_outlined),
+        selectedIcon:
+            const Icon(Icons.list_alt, color: SwooshColors.azulPrimario),
+        label: esNegocio ? 'Pedidos' : 'Mis Entregas',
+      ),
+      const NavigationDestination(
+        icon: Icon(Icons.map_outlined),
+        selectedIcon: Icon(Icons.map, color: SwooshColors.azulPrimario),
+        label: 'Mapa Ruta',
+      ),
+      const NavigationDestination(
+        icon: Icon(Icons.storage_outlined),
+        selectedIcon: Icon(Icons.storage, color: SwooshColors.azulPrimario),
+        label: 'Replicación',
+      ),
+      if (esNegocio)
+        const NavigationDestination(
+          icon: Icon(Icons.analytics_outlined),
+          selectedIcon: Icon(Icons.analytics, color: SwooshColors.azulPrimario),
+          label: 'Resumen',
+        ),
+    ];
+
+    final indiceSeguro = _tabIndex >= pantallas.length ? 0 : _tabIndex;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.bolt, color: Colors.lightBlueAccent),
-            SizedBox(width: 6),
-            Text('SWOOSH'),
+            const Icon(Icons.bolt, color: Colors.lightBlueAccent),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('SWOOSH', style: TextStyle(fontSize: 17)),
+                  Text(
+                    '${widget.sesion.nombre} · ${esNegocio ? 'Negocio' : 'Repartidor'}',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w400,
+                      color: Colors.white70,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.only(right: 4),
             child: ActionChip(
               avatar: Icon(
                 _isOnline ? Icons.cloud_done : Icons.cloud_off,
@@ -328,36 +388,20 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
               onPressed: _forzarSync,
             ),
           ),
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            icon: const Icon(Icons.logout),
+            onPressed: () async => await widget.onCerrarSesion(),
+          ),
         ],
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
-          : pantallas[_tabIndex],
+          : pantallas[indiceSeguro],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _tabIndex,
+        selectedIndex: indiceSeguro,
         onDestinationSelected: (i) => setState(() => _tabIndex = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.list_alt_outlined),
-            selectedIcon: Icon(Icons.list_alt, color: SwooshColors.azulPrimario),
-            label: 'Entregas',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.map_outlined),
-            selectedIcon: Icon(Icons.map, color: SwooshColors.azulPrimario),
-            label: 'Mapa Ruta',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.storage_outlined),
-            selectedIcon: Icon(Icons.storage, color: SwooshColors.azulPrimario),
-            label: 'Replicación',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.analytics_outlined),
-            selectedIcon: Icon(Icons.analytics, color: SwooshColors.azulPrimario),
-            label: 'Resumen',
-          ),
-        ],
+        destinations: destinos,
       ),
     );
   }

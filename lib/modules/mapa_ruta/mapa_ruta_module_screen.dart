@@ -123,7 +123,7 @@ class _MapaRutaModuleScreenState extends State<MapaRutaModuleScreen> {
                     Polyline(
                       points: puntosRuta,
                       strokeWidth: 6.0,
-                      color: SwooshColors.azulMarino.withOpacity(0.25),
+                      color: SwooshColors.azulMarino.withValues(alpha: 0.25),
                     ),
                     Polyline(
                       points: puntosRuta,

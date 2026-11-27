@@ -21,11 +21,11 @@ class SyncControl {
   static String _resolverUrlPorDefecto() {
     const definida = String.fromEnvironment('API_URL', defaultValue: '');
     if (definida.isNotEmpty) return definida;
-    if (kIsWeb) return 'http://localhost:3000';
+    if (kIsWeb) return 'http://localhost:8080';
     if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:3000';
+      return 'http://10.0.2.2:8080';
     }
-    return 'http://localhost:3000';
+    return 'http://localhost:8080';
   }
 
   void iniciarMonitorRed() {
@@ -140,7 +140,6 @@ class SyncControl {
             .map((e) => Pedido.fromJson(e as Map<String, dynamic>))
             .toList();
 
-        // No sobrescribir pedidos locales que aún tienen operaciones pendientes en cola
         final idsConPendientes = await _db.obtenerPedidoIdsConPendientes();
         final paraGuardar = remotos
             .where((p) => !idsConPendientes.contains(p.id))

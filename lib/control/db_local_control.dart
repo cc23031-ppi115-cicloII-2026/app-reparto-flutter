@@ -3,6 +3,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../entity/operacion_offline.dart';
 import '../entity/pedido.dart';
+import '../entity/sesion_usuario.dart';
 
 class DbLocalControl {
   static final DbLocalControl _instance = DbLocalControl._internal();
@@ -14,6 +15,8 @@ class DbLocalControl {
   // Almacenamiento fallback en memoria para compilación Web (kIsWeb)
   final Map<String, Pedido> _webPedidos = {};
   final Map<String, OperacionOffline> _webCola = {};
+  SesionUsuario? _webSesionActiva;
+  final Map<String, Map<String, dynamic>> _webUsuariosCache = {};
 
   Future<Database> get database async {
     if (_db != null) return _db!;
@@ -27,7 +30,7 @@ class DbLocalControl {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE pedidos_local (
@@ -65,6 +68,8 @@ class DbLocalControl {
             estado_sync TEXT NOT NULL DEFAULT 'PENDIENTE'
           )
         ''');
+
+        await _crearTablasAuth(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -81,13 +86,126 @@ class DbLocalControl {
           for (final sql in nuevasColumnas) {
             try {
               await db.execute(sql);
-            } catch (_) {
-              // Ignorar si la columna ya existe
-            }
+            } catch (_) {}
           }
+        }
+        if (oldVersion < 3) {
+          await _crearTablasAuth(db);
         }
       },
     );
+  }
+
+  Future<void> _crearTablasAuth(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sesion_activa (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        usuario TEXT NOT NULL,
+        rol TEXT NOT NULL,
+        nombre TEXT NOT NULL,
+        repartidor_id TEXT,
+        negocio_id TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS usuarios_cache (
+        usuario TEXT PRIMARY KEY,
+        password TEXT NOT NULL,
+        rol TEXT NOT NULL,
+        nombre TEXT NOT NULL,
+        repartidor_id TEXT,
+        negocio_id TEXT
+      )
+    ''');
+  }
+
+  // --- Operaciones de Sesión y Caché Offline de Usuarios ---
+
+  Future<void> guardarSesionActiva(SesionUsuario sesion, {String? password}) async {
+    if (kIsWeb) {
+      _webSesionActiva = sesion;
+      if (password != null && password.isNotEmpty) {
+        _webUsuariosCache[sesion.usuario.toLowerCase()] = {
+          ...sesion.toJson(),
+          'password': password,
+        };
+      }
+      return;
+    }
+
+    final db = await database;
+    await db.insert(
+      'sesion_activa',
+      {
+        'id': 1,
+        'usuario': sesion.usuario,
+        'rol': sesion.rol,
+        'nombre': sesion.nombre,
+        'repartidor_id': sesion.repartidorId,
+        'negocio_id': sesion.negocioId,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
+    if (password != null && password.isNotEmpty) {
+      await db.insert(
+        'usuarios_cache',
+        {
+          'usuario': sesion.usuario.toLowerCase(),
+          'password': password,
+          'rol': sesion.rol,
+          'nombre': sesion.nombre,
+          'repartidor_id': sesion.repartidorId,
+          'negocio_id': sesion.negocioId,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+  }
+
+  Future<SesionUsuario?> obtenerSesionActiva() async {
+    if (kIsWeb) return _webSesionActiva;
+
+    final db = await database;
+    final maps = await db.query('sesion_activa', where: 'id = 1', limit: 1);
+    if (maps.isEmpty) return null;
+    return SesionUsuario.fromJson(maps.first);
+  }
+
+  Future<SesionUsuario?> autenticarOfflineCache(String usuario, String password) async {
+    final key = usuario.trim().toLowerCase();
+    if (kIsWeb) {
+      final cached = _webUsuariosCache[key];
+      if (cached != null && cached['password'] == password) {
+        final sesion = SesionUsuario.fromJson(cached);
+        _webSesionActiva = sesion;
+        return sesion;
+      }
+      return null;
+    }
+
+    final db = await database;
+    final maps = await db.query(
+      'usuarios_cache',
+      where: 'usuario = ? AND password = ?',
+      whereArgs: [key, password],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    final sesion = SesionUsuario.fromJson(maps.first);
+    await guardarSesionActiva(sesion);
+    return sesion;
+  }
+
+  Future<void> cerrarSesionLocal() async {
+    if (kIsWeb) {
+      _webSesionActiva = null;
+      return;
+    }
+
+    final db = await database;
+    await db.delete('sesion_activa');
   }
 
   // --- Operaciones sobre pedidos_local ---
