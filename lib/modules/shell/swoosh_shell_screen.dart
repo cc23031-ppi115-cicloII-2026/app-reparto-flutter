@@ -10,7 +10,6 @@ import '../../theme/swoosh_colors.dart';
 import '../entregas/entregas_module_screen.dart';
 import '../mapa_ruta/mapa_ruta_module_screen.dart';
 import '../metricas/metricas_module_screen.dart';
-import '../replicacion/replicacion_module_screen.dart';
 
 class SwooshShellScreen extends StatefulWidget {
   final SesionUsuario sesion;
@@ -51,6 +50,14 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
   void initState() {
     super.initState();
     _inicializar();
+  }
+
+  @override
+  void didUpdateWidget(covariant SwooshShellScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sesion.esNegocio != widget.sesion.esNegocio) {
+      _tabIndex = 0;
+    }
   }
 
   Future<void> _inicializar() async {
@@ -264,84 +271,67 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
     });
   }
 
-  Future<void> _forzarSync() async {
-    if (_modoWebDemo) {
-      setState(() {
-        _isOnline = true;
-        _pendientesSync = 0;
-        _pedidos = _pedidos.map((p) => p.copyWith(sincronizado: true)).toList();
-      });
-      return;
-    }
-    await _pedidoControl.forzarSincronizacion();
-    await _refrescar();
-  }
-
   @override
   Widget build(BuildContext context) {
     final esNegocio = widget.sesion.esNegocio;
 
-    final pantallas = <Widget>[
-      EntregasModuleScreen(
-        pedidos: _pedidos,
-        isOnline: _isOnline,
-        ubicacionActual: _ubicacionActual,
-        puedeCrearPedidos: esNegocio,
-        onCambiarEstado: _cambiarEstado,
-        onCrearPedido: _crearPedido,
-        onCrearPedidoCompleto: _crearPedidoCompleto,
-      ),
-      MapaRutaModuleScreen(
-        pedidos: _pedidos,
-        ubicacionActual: _ubicacionActual,
-        optimizando: _optimizando,
-        onOptimizarRuta: _optimizarRuta,
-        onCambiarEstado: _cambiarEstado,
-      ),
-      ReplicacionModuleScreen(
-        isOnline: _isOnline,
-        pendientesSync: _pendientesSync,
-        ultimoTsyncMs: _ultimoTsyncMs,
-        pedidos: _pedidos,
-        onForzarSync: _forzarSync,
-        onToggleSimulacionRed: _modoWebDemo
-            ? () => setState(() => _isOnline = !_isOnline)
-            : null,
-      ),
-      if (esNegocio)
-        MetricasModuleScreen(
-          pedidos: _pedidos,
-          ultimoTsyncMs: _ultimoTsyncMs,
-          pendientesSync: _pendientesSync,
-        ),
-    ];
+    final pantallas = esNegocio
+        ? <Widget>[
+            EntregasModuleScreen(
+              pedidos: _pedidos,
+              isOnline: _isOnline,
+              ubicacionActual: _ubicacionActual,
+              puedeCrearPedidos: true,
+              onCambiarEstado: _cambiarEstado,
+              onCrearPedido: _crearPedido,
+              onCrearPedidoCompleto: _crearPedidoCompleto,
+            ),
+            MetricasModuleScreen(
+              pedidos: _pedidos,
+              ultimoTsyncMs: _ultimoTsyncMs,
+              pendientesSync: _pendientesSync,
+            ),
+          ]
+        : <Widget>[
+            MapaRutaModuleScreen(
+              pedidos: _pedidos,
+              ubicacionActual: _ubicacionActual,
+              optimizando: _optimizando,
+              onOptimizarRuta: _optimizarRuta,
+              onCambiarEstado: _cambiarEstado,
+            ),
+          ];
 
-    final destinos = <NavigationDestination>[
-      NavigationDestination(
-        icon: const Icon(Icons.list_alt_outlined),
-        selectedIcon:
-            const Icon(Icons.list_alt, color: SwooshColors.azulPrimario),
-        label: esNegocio ? 'Pedidos' : 'Mis Entregas',
-      ),
-      const NavigationDestination(
-        icon: Icon(Icons.map_outlined),
-        selectedIcon: Icon(Icons.map, color: SwooshColors.azulPrimario),
-        label: 'Mapa Ruta',
-      ),
-      const NavigationDestination(
-        icon: Icon(Icons.storage_outlined),
-        selectedIcon: Icon(Icons.storage, color: SwooshColors.azulPrimario),
-        label: 'Replicación',
-      ),
-      if (esNegocio)
-        const NavigationDestination(
-          icon: Icon(Icons.analytics_outlined),
-          selectedIcon: Icon(Icons.analytics, color: SwooshColors.azulPrimario),
-          label: 'Resumen',
-        ),
-    ];
+    final destinos = esNegocio
+        ? const <NavigationDestination>[
+            NavigationDestination(
+              icon: Icon(Icons.list_alt_outlined),
+              selectedIcon: Icon(
+                Icons.list_alt,
+                color: SwooshColors.azulPrimario,
+              ),
+              label: 'Pedidos',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.analytics_outlined),
+              selectedIcon: Icon(
+                Icons.analytics,
+                color: SwooshColors.azulPrimario,
+              ),
+              label: 'Resumen',
+            ),
+          ]
+        : const <NavigationDestination>[
+            NavigationDestination(
+              icon: Icon(Icons.map_outlined),
+              selectedIcon: Icon(Icons.map, color: SwooshColors.azulPrimario),
+              label: 'Mapa Ruta',
+            ),
+          ];
 
-    final indiceSeguro = _tabIndex >= pantallas.length ? 0 : _tabIndex;
+    final indiceSeguro = _tabIndex >= pantallas.length || _tabIndex < 0
+        ? 0
+        : _tabIndex;
 
     return Scaffold(
       appBar: AppBar(
@@ -369,25 +359,6 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
           ],
         ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: ActionChip(
-              avatar: Icon(
-                _isOnline ? Icons.cloud_done : Icons.cloud_off,
-                color: SwooshColors.azulMarino,
-                size: 18,
-              ),
-              label: Text(
-                _isOnline ? 'Online' : 'Offline ($_pendientesSync)',
-                style: const TextStyle(
-                  color: SwooshColors.azulMarino,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              backgroundColor: SwooshColors.azulClaro,
-              onPressed: _forzarSync,
-            ),
-          ),
           IconButton(
             tooltip: 'Cerrar sesión',
             icon: const Icon(Icons.logout),
@@ -398,10 +369,36 @@ class _SwooshShellScreenState extends State<SwooshShellScreen> {
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
           : pantallas[indiceSeguro],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: indiceSeguro,
-        onDestinationSelected: (i) => setState(() => _tabIndex = i),
-        destinations: destinos,
+      bottomNavigationBar: destinos.length == 1
+          ? _barraDestinoUnico(context, destinos.single)
+          : NavigationBar(
+              selectedIndex: indiceSeguro,
+              onDestinationSelected: (i) => setState(() => _tabIndex = i),
+              destinations: destinos,
+            ),
+    );
+  }
+
+  Widget _barraDestinoUnico(
+    BuildContext context,
+    NavigationDestination destino,
+  ) {
+    return SafeArea(
+      top: false,
+      child: SizedBox(
+        height: 80,
+        child: Semantics(
+          selected: true,
+          label: destino.label,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              destino.selectedIcon ?? destino.icon,
+              const SizedBox(height: 4),
+              Text(destino.label, style: const TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -13,8 +13,12 @@ class SesionUsuario {
     this.negocioId,
   });
 
-  bool get esNegocio => rol.toLowerCase() == 'negocio';
-  bool get esRepartidor => rol.toLowerCase() == 'repartidor';
+  bool get esNegocio =>
+      rol.trim().toLowerCase() == 'negocio' ||
+      rol.trim().toLowerCase() == 'negocio1';
+  bool get esRepartidor =>
+      rol.trim().toLowerCase() == 'repartidor' ||
+      rol.trim().toLowerCase() == 'rep1';
 
   factory SesionUsuario.fromJson(Map<String, dynamic> json) {
     return SesionUsuario(
