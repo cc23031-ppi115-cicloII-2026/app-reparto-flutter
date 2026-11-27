@@ -50,13 +50,10 @@ class PedidoControl {
       sincronizado: false,
     );
 
-    await _db.guardarPedidoYEncolarOperaciones(nuevo, [OperacionOffline(
-      opId: _uuid.v4(),
-      pedidoId: nuevo.id,
-      tipoOperacion: 'CREAR_PEDIDO',
-      payloadJson: jsonEncode(nuevo.toApiJson()),
-      creadoEnMs: DateTime.now().millisecondsSinceEpoch,
-    )]);
+    await _db.guardarPedidoYEncolarOperaciones(
+      nuevo,
+      _operacionesNuevoPedido(nuevo),
+    );
 
     _sync.sincronizarAhora(repartidorId: nuevo.repartidorId);
     return nuevo;
@@ -70,14 +67,39 @@ class PedidoControl {
       sincronizado: false,
     );
 
-    await _db.guardarPedidoYEncolarOperaciones(nuevo, [OperacionOffline(
-      opId: _uuid.v4(),
-      pedidoId: nuevo.id,
-      tipoOperacion: 'CREAR_PEDIDO',
-      payloadJson: jsonEncode(nuevo.toApiJson()),
-      creadoEnMs: DateTime.now().millisecondsSinceEpoch,
-    )]);
+    await _db.guardarPedidoYEncolarOperaciones(
+      nuevo,
+      _operacionesNuevoPedido(nuevo),
+    );
     unawaited(_sync.sincronizarAhora(repartidorId: nuevo.repartidorId));
+  }
+
+  List<OperacionOffline> _operacionesNuevoPedido(Pedido pedido) {
+    final ahora = DateTime.now().millisecondsSinceEpoch;
+    final operaciones = <OperacionOffline>[
+      OperacionOffline(
+        opId: _uuid.v4(),
+        pedidoId: pedido.id,
+        tipoOperacion: 'CREAR_PEDIDO',
+        payloadJson: jsonEncode(pedido.toApiJson()),
+        creadoEnMs: ahora,
+      ),
+    ];
+
+    final repartidorId = pedido.repartidorId;
+    if (repartidorId != null && repartidorId.isNotEmpty) {
+      operaciones.add(OperacionOffline(
+        opId: _uuid.v4(),
+        pedidoId: pedido.id,
+        tipoOperacion: 'ACTUALIZAR_ESTADO',
+        payloadJson: jsonEncode({
+          'estado': 'asignado',
+          'repartidor_id': repartidorId,
+        }),
+        creadoEnMs: ahora + 1,
+      ));
+    }
+    return operaciones;
   }
 
   /// 4. Actualiza el estado localmente (ej. 'entregado'), encola 'ACTUALIZAR_ESTADO' y sincroniza.
@@ -94,7 +116,17 @@ class PedidoControl {
     final creacionPendiente = pendientesLocales.any((operacion) =>
       operacion.pedidoId == pedidoId &&
       operacion.tipoOperacion == 'CREAR_PEDIDO');
-    final estadoBase = creacionPendiente ? 'pendiente' : actual.estado;
+    final asignacionPendiente = pendientesLocales.any((operacion) {
+      if (operacion.pedidoId != pedidoId ||
+          operacion.tipoOperacion != 'ACTUALIZAR_ESTADO') {
+        return false;
+      }
+      final payload = jsonDecode(operacion.payloadJson) as Map<String, dynamic>;
+      return payload['estado'] == 'asignado';
+    });
+    final estadoBase = creacionPendiente
+        ? (asignacionPendiente ? 'asignado' : 'pendiente')
+        : actual.estado;
 
     final estados = nuevoEstado == 'entregado'
       ? switch (estadoBase) {

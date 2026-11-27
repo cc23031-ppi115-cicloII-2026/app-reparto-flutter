@@ -42,7 +42,7 @@ class SyncControl {
       }
     });
     _reintentoTimer?.cancel();
-    _reintentoTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _reintentoTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       unawaited(sincronizarAhora(repartidorId: repartidorId));
     });
   }
